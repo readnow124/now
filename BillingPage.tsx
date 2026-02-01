@@ -557,6 +557,22 @@ const BillingPage: React.FC = () => {
                  </div>
                </div>
 
+               {subscription?.subscription?.pending_plan_change && (
+                 <div className="mb-6 bg-blue-50 border border-blue-200 rounded-xl p-4">
+                   <div className="flex items-start gap-3">
+                     <AlertTriangle className="h-5 w-5 text-blue-600 shrink-0 mt-0.5" />
+                     <div>
+                       <p className="text-sm font-bold text-blue-900">Plan Change Scheduled</p>
+                       <p className="text-xs text-blue-700 mt-1 leading-relaxed">
+                         Your plan will change to {subscription.subscription.pending_plan_change.plan_type.charAt(0).toUpperCase() + subscription.subscription.pending_plan_change.plan_type.slice(1)} Plan on{' '}
+                         {new Date(subscription.subscription.current_period_end).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}.
+                         You'll keep full access to your current plan until then.
+                       </p>
+                     </div>
+                   </div>
+                 </div>
+               )}
+
                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
                   <div className="bg-gray-50 rounded-2xl p-5 border border-transparent hover:border-gray-200 transition-colors">
                      <p className="text-xs text-gray-500 font-bold uppercase tracking-wider mb-2">Billing Period</p>

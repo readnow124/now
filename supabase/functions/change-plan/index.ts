@@ -113,6 +113,7 @@ Deno.serve(async (req) => {
     const currentPlanLevel = PLAN_HIERARCHY[currentSub.plan_type as keyof typeof PLAN_HIERARCHY] || 0;
     const newPlanLevel = PLAN_HIERARCHY[newPlanType as keyof typeof PLAN_HIERARCHY] || 0;
     const isUpgrade = newPlanLevel > currentPlanLevel;
+    const isDowngrade = newPlanLevel < currentPlanLevel;
 
     const hasIntervalChange = (currentSub.plan_type === 'monthly' && newPlanType !== 'monthly') ||
                               (currentSub.plan_type !== 'monthly' && newPlanType === 'monthly') ||
@@ -123,9 +124,30 @@ Deno.serve(async (req) => {
       from: currentSub.plan_type,
       to: newPlanType,
       isUpgrade,
+      isDowngrade,
       isTrial: isCurrentlyTrial,
       hasIntervalChange
     });
+
+    if (isDowngrade && !hasIntervalChange) {
+      console.log('Downgrade detected - storing pending change, no Stripe update');
+
+      await supabaseAdmin.from('subscriptions').update({
+        pending_plan_change: {
+          plan_type: newPlanType,
+          price_id: newPriceId,
+          requested_at: new Date().toISOString()
+        },
+        updated_at: new Date().toISOString()
+      }).eq('id', currentSub.id);
+
+      return new Response(JSON.stringify({
+        success: true,
+        requiresPayment: false,
+        message: 'Plan change scheduled for end of billing period. No charge today.',
+        isDowngrade: true
+      }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 });
+    }
 
     const updateParams: any = {
       items: [{ id: stripeSubscription.items.data[0].id, price: newPriceId }],
@@ -149,27 +171,19 @@ Deno.serve(async (req) => {
       console.log('Upgrading plan - prorating and charging immediately, maintaining billing cycle');
       updateParams.proration_behavior = 'create_prorations';
       updateParams.billing_cycle_anchor = 'unchanged';
-    } else {
-      console.log('Downgrading plan - scheduling change for next billing period');
-      updateParams.proration_behavior = 'none';
-      updateParams.billing_cycle_anchor = 'unchanged';
     }
 
     const updatedSubscription = await stripe.subscriptions.update(stripeSubscriptionId, updateParams);
 
-    const isDowngrade = newPlanLevel < currentPlanLevel && !hasIntervalChange;
-
     const dbUpdate: any = {
+      plan_type: newPlanType,
       status: updatedSubscription.status,
       current_period_start: new Date(updatedSubscription.current_period_start * 1000).toISOString(),
       current_period_end: new Date(updatedSubscription.current_period_end * 1000).toISOString(),
       cancel_at_period_end: false,
+      pending_plan_change: null,
       updated_at: new Date().toISOString()
     };
-
-    if (!isDowngrade) {
-      dbUpdate.plan_type = newPlanType;
-    }
 
     await supabaseAdmin.from('subscriptions').update(dbUpdate).eq('id', currentSub.id);
 

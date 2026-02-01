@@ -393,16 +393,25 @@ const CheckoutForm: React.FC<CustomCheckoutProps> = ({
             <p className="text-xs text-gray-600">{plan.description}</p>
           </div>
           <div className="text-right">
-            <p className="text-2xl font-bold text-gray-900">{plan.price}</p>
-            <p className="text-xs text-gray-600">{plan.period}</p>
+            <p className="text-2xl font-bold text-gray-900">
+              {previewData && previewData.changeType === 'downgrade'
+                ? 'No Charge'
+                : previewData && previewData.amount !== undefined
+                  ? formatAmount(previewData.amount, previewData.currency)
+                  : plan.price}
+            </p>
+            <p className="text-xs text-gray-600">
+              {previewData && previewData.changeType === 'downgrade' ? 'today' : plan.period}
+            </p>
           </div>
         </div>
       </div>
 
-      <div>
-        <label className="block text-sm font-medium text-gray-700 mb-3">
-          Payment Method
-        </label>
+      {previewData && previewData.changeType !== 'downgrade' && (
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-3">
+            Payment Method
+          </label>
 
         {!showNewCardForm && paymentMethods.length > 0 ? (
           <div className="space-y-3">
@@ -473,7 +482,8 @@ const CheckoutForm: React.FC<CustomCheckoutProps> = ({
             </div>
           </div>
         )}
-      </div>
+        </div>
+      )}
 
       {isTrial ? (
         <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
