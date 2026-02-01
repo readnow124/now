@@ -1,7 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
-import { 
-  CreditCard, Lock, Shield, AlertCircle, Loader2, Crown, Zap 
+import {
+  CreditCard, Lock, Shield, AlertCircle, Loader2, Crown, Zap, Plus, Check
 } from 'lucide-react';
 import { loadStripe, StripeElementsOptions } from '@stripe/stripe-js';
 import {
@@ -26,7 +26,7 @@ interface Plan {
   popular?: boolean;
   savings?: string;
   priceId?: string;
-  currency?: string; 
+  currency?: string;
 }
 
 interface CustomCheckoutProps {
@@ -39,26 +39,150 @@ interface CustomCheckoutProps {
   isTrial?: boolean;
 }
 
-const CheckoutForm: React.FC<CustomCheckoutProps> = ({ 
-  plan, 
-  priceId, 
-  autoRenew, 
-  onSuccess, 
-  onCancel, 
-  isTrial 
+interface PaymentMethod {
+  id: string;
+  card?: {
+    brand: string;
+    last4: string;
+    exp_month: number;
+    exp_year: number;
+  };
+  is_default: boolean;
+}
+
+const CheckoutForm: React.FC<CustomCheckoutProps> = ({
+  plan,
+  priceId,
+  autoRenew,
+  onSuccess,
+  onCancel,
+  isTrial
 }) => {
   const stripe = useStripe();
   const elements = useElements();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [paymentMethods, setPaymentMethods] = useState<PaymentMethod[]>([]);
+  const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<string>('');
+  const [showNewCardForm, setShowNewCardForm] = useState(false);
+  const [loadingPaymentMethods, setLoadingPaymentMethods] = useState(true);
+  const [previewData, setPreviewData] = useState<any>(null);
+  const [loadingPreview, setLoadingPreview] = useState(false);
   const { user } = useAuth();
 
   const effectiveAutoRenew = isTrial ? true : autoRenew;
 
+  useEffect(() => {
+    if (user) {
+      loadPaymentMethods();
+      loadPricePreview();
+    }
+  }, [user, plan.planId]);
+
+  const loadPaymentMethods = async () => {
+    try {
+      const subscriptionData = await SubscriptionService.getUserSubscription(user!.id);
+      if (!subscriptionData?.stripe_customer_id) {
+        setShowNewCardForm(true);
+        setLoadingPaymentMethods(false);
+        return;
+      }
+
+      const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/get-payment-methods`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ customerId: subscriptionData.stripe_customer_id })
+      });
+
+      if (response.ok) {
+        const { paymentMethods: methods } = await response.json();
+
+        const uniqueMethods: PaymentMethod[] = [];
+        const seenCards = new Set();
+        (methods || []).forEach((method: any) => {
+          const cardKey = `${method.card?.brand}-${method.card?.last4}`;
+          if (!seenCards.has(cardKey)) {
+            seenCards.add(cardKey);
+            uniqueMethods.push(method);
+          }
+        });
+
+        setPaymentMethods(uniqueMethods);
+
+        const defaultMethod = uniqueMethods.find(m => m.is_default);
+        if (defaultMethod) {
+          setSelectedPaymentMethod(defaultMethod.id);
+        } else if (uniqueMethods.length > 0) {
+          setSelectedPaymentMethod(uniqueMethods[0].id);
+        } else {
+          setShowNewCardForm(true);
+        }
+      } else {
+        setShowNewCardForm(true);
+      }
+    } catch (err) {
+      console.error('Error loading payment methods:', err);
+      setShowNewCardForm(true);
+    } finally {
+      setLoadingPaymentMethods(false);
+    }
+  };
+
+  const loadPricePreview = async () => {
+    if (isTrial) {
+      setPreviewData({
+        amount: 0,
+        currency: 'usd',
+        message: 'No charge today. Card will be charged after 30-day trial ends.'
+      });
+      return;
+    }
+
+    try {
+      setLoadingPreview(true);
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) return;
+
+      const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/preview-plan-change`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${session.access_token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          newPlanType: plan.planId,
+          newPriceId: priceId
+        })
+      });
+
+      if (response.ok) {
+        const preview = await response.json();
+        setPreviewData(preview);
+      }
+    } catch (err) {
+      console.error('Error loading price preview:', err);
+    } finally {
+      setLoadingPreview(false);
+    }
+  };
+
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
 
-    if (!stripe || !elements || !user) {
+    if (!stripe || !user) {
+      return;
+    }
+
+    if (!showNewCardForm && !selectedPaymentMethod) {
+      setError('Please select a payment method');
+      return;
+    }
+
+    if (showNewCardForm && !elements) {
+      setError('Please enter card details');
       return;
     }
 
@@ -66,41 +190,42 @@ const CheckoutForm: React.FC<CustomCheckoutProps> = ({
     setError('');
 
     try {
-      const cardElement = elements.getElement(CardElement);
-      if (!cardElement) {
-        throw new Error('Card element not found');
+      let paymentMethodId = selectedPaymentMethod;
+
+      if (showNewCardForm) {
+        const cardElement = elements!.getElement(CardElement);
+        if (!cardElement) {
+          throw new Error('Card element not found');
+        }
+
+        const { error: paymentMethodError, paymentMethod } = await stripe.createPaymentMethod({
+          type: 'card',
+          card: cardElement,
+          billing_details: {
+            email: user.email,
+          },
+        });
+
+        if (paymentMethodError) {
+          throw new Error(paymentMethodError.message);
+        }
+
+        paymentMethodId = paymentMethod.id;
       }
 
-      // 1. Create payment method via Stripe
-      const { error: paymentMethodError, paymentMethod } = await stripe.createPaymentMethod({
-        type: 'card',
-        card: cardElement,
-        billing_details: {
-          email: user.email,
-        },
-      });
-
-      if (paymentMethodError) {
-        throw new Error(paymentMethodError.message);
-      }
-
-      // 2. Check if user has existing subscription
       const subscriptionData = await SubscriptionService.getUserSubscription(user.id);
       const hasActiveSubscription = subscriptionData &&
         (subscriptionData.status === 'active' || subscriptionData.status === 'trialing' || subscriptionData.status === 'canceled');
 
-      // 3. Branch Logic: Trial vs New Purchase vs Plan Change
       const { data: { session }, error: sessionError } = await supabase.auth.getSession();
       if (sessionError || !session?.access_token) {
         throw new Error('Authentication error. Please refresh and try again.');
       }
 
       if (isTrial) {
-        // ✅ TRIAL FLOW (New users only)
-        await SubscriptionService.initiateTrialWithCard(priceId!, paymentMethod.id);
+        await SubscriptionService.initiateTrialWithCard(priceId!, paymentMethodId);
         console.log('✅ Trial initiated successfully via Stripe');
       } else if (hasActiveSubscription) {
-        // ✅ PLAN CHANGE FLOW (User has existing subscription)
         console.log('✅ User has active subscription - routing to change-plan');
         const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/change-plan`, {
           method: 'POST',
@@ -111,7 +236,7 @@ const CheckoutForm: React.FC<CustomCheckoutProps> = ({
           body: JSON.stringify({
             newPlanType: plan.planId,
             newPriceId: priceId,
-            paymentMethodId: paymentMethod.id
+            paymentMethodId: paymentMethodId
           })
         });
 
@@ -123,16 +248,23 @@ const CheckoutForm: React.FC<CustomCheckoutProps> = ({
         const { requiresPayment, clientSecret } = await response.json();
 
         if (requiresPayment && clientSecret) {
-          const { error: confirmError } = await stripe.confirmCardPayment(clientSecret, {
-            payment_method: {
-              card: cardElement,
-              billing_details: { email: user.email },
-            },
-          });
-          if (confirmError) throw new Error(confirmError.message);
+          if (showNewCardForm) {
+            const cardElement = elements!.getElement(CardElement);
+            const { error: confirmError } = await stripe.confirmCardPayment(clientSecret, {
+              payment_method: {
+                card: cardElement!,
+                billing_details: { email: user.email },
+              },
+            });
+            if (confirmError) throw new Error(confirmError.message);
+          } else {
+            const { error: confirmError } = await stripe.confirmCardPayment(clientSecret, {
+              payment_method: paymentMethodId
+            });
+            if (confirmError) throw new Error(confirmError.message);
+          }
         }
       } else {
-        // ✅ NEW PURCHASE FLOW (No active subscription)
         console.log('✅ No active subscription - creating new one');
         const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/create-payment`, {
           method: 'POST',
@@ -144,7 +276,7 @@ const CheckoutForm: React.FC<CustomCheckoutProps> = ({
             planType: plan.planId,
             priceId: priceId,
             autoRenew: effectiveAutoRenew,
-            paymentMethodId: paymentMethod.id,
+            paymentMethodId: paymentMethodId,
             isTrial: false
           })
         });
@@ -157,23 +289,26 @@ const CheckoutForm: React.FC<CustomCheckoutProps> = ({
         const { clientSecret } = await response.json();
 
         if (clientSecret) {
-          const { error: confirmError } = await stripe.confirmCardPayment(clientSecret, {
-            payment_method: {
-              card: cardElement,
-              billing_details: { email: user.email },
-            },
-          });
-          if (confirmError) throw new Error(confirmError.message);
+          if (showNewCardForm) {
+            const cardElement = elements!.getElement(CardElement);
+            const { error: confirmError } = await stripe.confirmCardPayment(clientSecret, {
+              payment_method: {
+                card: cardElement!,
+                billing_details: { email: user.email },
+              },
+            });
+            if (confirmError) throw new Error(confirmError.message);
+          } else {
+            const { error: confirmError } = await stripe.confirmCardPayment(clientSecret, {
+              payment_method: paymentMethodId
+            });
+            if (confirmError) throw new Error(confirmError.message);
+          }
         }
       }
 
-      // 3. ✅ WAIT FOR DB UPDATE (The Fix)
-      // This holds the loading state until the backend confirms the subscription exists
       await SubscriptionService.waitForSubscription(user.id);
-
       onSuccess();
-      
-      // Double tap refresh just in case
       window.dispatchEvent(new CustomEvent('subscription-updated'));
 
     } catch (err: any) {
@@ -183,6 +318,21 @@ const CheckoutForm: React.FC<CustomCheckoutProps> = ({
       setLoading(false);
     }
   };
+
+  const formatAmount = (amount: number, currency: string) => {
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: currency.toUpperCase(),
+    }).format(amount / 100);
+  };
+
+  if (loadingPaymentMethods) {
+    return (
+      <div className="flex items-center justify-center py-12">
+        <Loader2 className="w-8 h-8 animate-spin text-[#E85A9B]" />
+      </div>
+    );
+  }
 
   return (
     <form onSubmit={handleSubmit} className="space-y-6">
@@ -195,11 +345,23 @@ const CheckoutForm: React.FC<CustomCheckoutProps> = ({
         <h3 className="text-xl font-bold text-gray-900">
           {isTrial ? 'Start 30-Day Free Trial' : 'Confirm Payment'}
         </h3>
-        <p className="text-sm text-gray-500 mt-1">
-          {isTrial 
-            ? `Total due today: ${plan.currency || '$'}0.00` 
-            : `You will be charged ${plan.price} now.`}
-        </p>
+        {loadingPreview ? (
+          <div className="flex items-center justify-center gap-2 mt-1">
+            <Loader2 className="w-3 h-3 animate-spin text-gray-400" />
+            <p className="text-sm text-gray-500">Calculating amount...</p>
+          </div>
+        ) : previewData ? (
+          <div className="mt-2">
+            <p className="text-2xl font-bold text-gray-900">
+              {formatAmount(previewData.amount, previewData.currency)}
+            </p>
+            <p className="text-xs text-gray-500 mt-1">{previewData.message}</p>
+          </div>
+        ) : (
+          <p className="text-sm text-gray-500 mt-1">
+            {isTrial ? `Total due today: ${plan.currency || '$'}0.00` : `You will be charged ${plan.price} now.`}
+          </p>
+        )}
       </div>
 
       {error && (
@@ -223,29 +385,79 @@ const CheckoutForm: React.FC<CustomCheckoutProps> = ({
       </div>
 
       <div>
-        <label className="block text-sm font-medium text-gray-700 mb-2">
+        <label className="block text-sm font-medium text-gray-700 mb-3">
           Payment Method
         </label>
-        <div className="bg-gray-50 rounded-xl p-4 border border-gray-200 focus-within:ring-2 focus-within:ring-[#E6A85C] transition-all">
-          <CardElement
-            options={{
-              style: {
-                base: {
-                  fontSize: '16px',
-                  color: '#374151',
-                  fontFamily: 'Inter, sans-serif',
-                  '::placeholder': { color: '#9CA3AF' },
-                },
-                invalid: { color: '#EF4444' },
-              },
-              hidePostalCode: false,
-            }}
-          />
-        </div>
-        <div className="flex items-center gap-2 mt-2 text-xs text-gray-500">
-          <Lock className="w-3 h-3" />
-          Secured by Stripe SSL encryption
-        </div>
+
+        {!showNewCardForm && paymentMethods.length > 0 ? (
+          <div className="space-y-3">
+            {paymentMethods.map((method) => (
+              <button
+                key={method.id}
+                type="button"
+                onClick={() => setSelectedPaymentMethod(method.id)}
+                className={`w-full p-4 rounded-xl border-2 flex items-center gap-4 transition-all text-left ${
+                  selectedPaymentMethod === method.id
+                    ? 'border-[#E85A9B] bg-white ring-4 ring-[#E85A9B]/10'
+                    : 'border-gray-200 bg-gray-50 hover:bg-gray-100'
+                }`}
+              >
+                <div className="w-12 h-8 bg-slate-800 rounded-md flex items-center justify-center text-white font-bold text-[9px] uppercase tracking-wider">
+                  {method.card?.brand || 'CARD'}
+                </div>
+                <div className="flex-1">
+                  <p className="font-bold text-gray-700">•••• {method.card?.last4}</p>
+                  <p className="text-xs text-gray-500">Exp: {method.card?.exp_month}/{method.card?.exp_year}</p>
+                </div>
+                {method.is_default && (
+                  <span className="text-[10px] font-bold bg-blue-100 text-blue-700 px-2 py-1 rounded-full">Default</span>
+                )}
+                {selectedPaymentMethod === method.id && <Check className="w-5 h-5 text-[#E85A9B]" />}
+              </button>
+            ))}
+
+            <button
+              type="button"
+              onClick={() => setShowNewCardForm(true)}
+              className="w-full p-4 rounded-xl border-2 border-dashed border-gray-300 flex items-center justify-center gap-2 text-gray-600 hover:border-[#E85A9B] hover:text-[#E85A9B] transition-all"
+            >
+              <Plus className="w-5 h-5" />
+              <span className="font-medium">Add New Card</span>
+            </button>
+          </div>
+        ) : (
+          <div>
+            {paymentMethods.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setShowNewCardForm(false)}
+                className="text-sm text-[#E85A9B] hover:underline mb-3"
+              >
+                ← Use saved card
+              </button>
+            )}
+            <div className="bg-gray-50 rounded-xl p-4 border border-gray-200 focus-within:ring-2 focus-within:ring-[#E6A85C] transition-all">
+              <CardElement
+                options={{
+                  style: {
+                    base: {
+                      fontSize: '16px',
+                      color: '#374151',
+                      fontFamily: 'Inter, sans-serif',
+                      '::placeholder': { color: '#9CA3AF' },
+                    },
+                    invalid: { color: '#EF4444' },
+                  },
+                  hidePostalCode: false,
+                }}
+              />
+            </div>
+            <div className="flex items-center gap-2 mt-2 text-xs text-gray-500">
+              <Lock className="w-3 h-3" />
+              Secured by Stripe SSL encryption
+            </div>
+          </div>
+        )}
       </div>
 
       {isTrial ? (
@@ -253,10 +465,10 @@ const CheckoutForm: React.FC<CustomCheckoutProps> = ({
           <div className="flex items-start gap-3">
             <Shield className="h-5 w-5 text-blue-600 shrink-0 mt-0.5" />
             <div>
-              <p className="text-sm font-bold text-blue-900">Standard Verification</p>
+              <p className="text-sm font-bold text-blue-900">Card Verification</p>
               <p className="text-xs text-blue-700 mt-1 leading-relaxed">
-                A valid card is required to verify your identity. 
-                <span className="font-semibold"> You will not be charged today.</span> Your subscription will 
+                A valid card is required to verify your identity.
+                <span className="font-semibold"> You will not be charged today.</span> Your subscription will
                 automatically renew to the {plan.name} plan ({plan.price}/{plan.period}) after 30 days unless cancelled.
               </p>
             </div>
@@ -288,17 +500,17 @@ const CheckoutForm: React.FC<CustomCheckoutProps> = ({
         </button>
         <button
           type="submit"
-          disabled={!stripe || loading}
+          disabled={!stripe || loading || (!showNewCardForm && !selectedPaymentMethod)}
           className={`flex-[2] py-3 px-4 text-white rounded-xl hover:shadow-lg transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 font-bold ${
-            isTrial 
-              ? 'bg-gradient-to-r from-blue-600 to-indigo-600' 
+            isTrial
+              ? 'bg-gradient-to-r from-blue-600 to-indigo-600'
               : 'bg-gradient-to-r from-[#E6A85C] via-[#E85A9B] to-[#D946EF]'
           }`}
         >
           {loading ? (
             <>
               <Loader2 className="h-5 w-5 animate-spin" />
-              <span>Verifying...</span>
+              <span>Processing...</span>
             </>
           ) : (
             isTrial ? (
@@ -306,10 +518,15 @@ const CheckoutForm: React.FC<CustomCheckoutProps> = ({
                 <Zap className="h-4 w-4 fill-current" />
                 Activate Free Trial
               </>
+            ) : previewData && previewData.amount > 0 ? (
+              <>
+                <Lock className="h-4 w-4" />
+                Pay {formatAmount(previewData.amount, previewData.currency)}
+              </>
             ) : (
               <>
                 <Lock className="h-4 w-4" />
-                Pay {plan.price}
+                Confirm
               </>
             )
           )}
@@ -336,10 +553,10 @@ const CustomCheckout: React.FC<CustomCheckoutProps> = (props) => {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
-      <motion.div 
-        initial={{ scale: 0.95, opacity: 0 }} 
-        animate={{ scale: 1, opacity: 1 }} 
-        className="bg-white w-full max-w-md rounded-3xl p-8 shadow-2xl relative overflow-hidden"
+      <motion.div
+        initial={{ scale: 0.95, opacity: 0 }}
+        animate={{ scale: 1, opacity: 1 }}
+        className="bg-white w-full max-w-md rounded-3xl p-8 shadow-2xl relative overflow-hidden max-h-[90vh] overflow-y-auto"
       >
         <Elements stripe={stripePromise} options={elementsOptions}>
           <CheckoutForm {...props} />

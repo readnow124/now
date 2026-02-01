@@ -114,11 +114,17 @@ Deno.serve(async (req) => {
     const newPlanLevel = PLAN_HIERARCHY[newPlanType as keyof typeof PLAN_HIERARCHY] || 0;
     const isUpgrade = newPlanLevel > currentPlanLevel;
 
+    const hasIntervalChange = (currentSub.plan_type === 'monthly' && newPlanType !== 'monthly') ||
+                              (currentSub.plan_type !== 'monthly' && newPlanType === 'monthly') ||
+                              (currentSub.plan_type === 'semiannual' && newPlanType === 'annual') ||
+                              (currentSub.plan_type === 'annual' && newPlanType === 'semiannual');
+
     console.log('Plan change detected:', {
       from: currentSub.plan_type,
       to: newPlanType,
       isUpgrade,
-      isTrial: isCurrentlyTrial
+      isTrial: isCurrentlyTrial,
+      hasIntervalChange
     });
 
     const updateParams: any = {
@@ -133,6 +139,10 @@ Deno.serve(async (req) => {
     if (isCurrentlyTrial && newPlanType !== 'trial') {
       console.log('Converting trial to paid plan - charging immediately');
       updateParams.trial_end = 'now';
+      updateParams.proration_behavior = 'create_prorations';
+      updateParams.billing_cycle_anchor = 'now';
+    } else if (hasIntervalChange) {
+      console.log('Changing billing interval - starting new billing cycle with proration');
       updateParams.proration_behavior = 'create_prorations';
       updateParams.billing_cycle_anchor = 'now';
     } else if (isUpgrade) {
@@ -156,16 +166,25 @@ Deno.serve(async (req) => {
       updated_at: new Date().toISOString()
     }).eq('id', currentSub.id);
 
-    if (isCurrentlyTrial || isUpgrade) {
+    if (isCurrentlyTrial || isUpgrade || hasIntervalChange) {
       const latestInvoice = await stripe.invoices.retrieve(updatedSubscription.latest_invoice as string);
       const clientSecret = (latestInvoice.payment_intent as any)?.client_secret;
 
       if (clientSecret) {
+        let message = 'Plan changed successfully.';
+        if (isCurrentlyTrial) {
+          message = 'Trial converted to paid plan.';
+        } else if (hasIntervalChange) {
+          message = 'Billing interval changed. You\'ll be charged the prorated amount for the new plan.';
+        } else if (isUpgrade) {
+          message = 'Plan upgraded. You\'ll be charged the prorated difference.';
+        }
+
         return new Response(JSON.stringify({
           success: true,
           requiresPayment: true,
           clientSecret: clientSecret,
-          message: isUpgrade ? 'Plan upgraded. You\'ll be charged the prorated difference.' : 'Trial converted to paid plan.'
+          message: message
         }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 });
       }
     }
