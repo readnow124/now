@@ -84,18 +84,56 @@ const CheckoutForm: React.FC<CustomCheckoutProps> = ({
         throw new Error(paymentMethodError.message);
       }
 
-      // 2. Branch Logic: Trial vs Paid
+      // 2. Check if user has existing subscription
+      const subscriptionData = await SubscriptionService.getUserSubscription(user.id);
+      const hasActiveSubscription = subscriptionData &&
+        (subscriptionData.status === 'active' || subscriptionData.status === 'trialing' || subscriptionData.status === 'canceled');
+
+      // 3. Branch Logic: Trial vs New Purchase vs Plan Change
+      const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+      if (sessionError || !session?.access_token) {
+        throw new Error('Authentication error. Please refresh and try again.');
+      }
+
       if (isTrial) {
-        // ✅ TRIAL FLOW
+        // ✅ TRIAL FLOW (New users only)
         await SubscriptionService.initiateTrialWithCard(priceId!, paymentMethod.id);
         console.log('✅ Trial initiated successfully via Stripe');
-      } else {
-        // ✅ STANDARD PAID FLOW
-        const { data: { session }, error: sessionError } = await supabase.auth.getSession();
-        if (sessionError || !session?.access_token) {
-          throw new Error('Authentication error. Please refresh and try again.');
+      } else if (hasActiveSubscription) {
+        // ✅ PLAN CHANGE FLOW (User has existing subscription)
+        console.log('✅ User has active subscription - routing to change-plan');
+        const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/change-plan`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${session.access_token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            newPlanType: plan.planId,
+            newPriceId: priceId,
+            paymentMethodId: paymentMethod.id
+          })
+        });
+
+        if (!response.ok) {
+          const errorData = await response.json();
+          throw new Error(errorData.error || 'Plan change failed');
         }
 
+        const { requiresPayment, clientSecret } = await response.json();
+
+        if (requiresPayment && clientSecret) {
+          const { error: confirmError } = await stripe.confirmCardPayment(clientSecret, {
+            payment_method: {
+              card: cardElement,
+              billing_details: { email: user.email },
+            },
+          });
+          if (confirmError) throw new Error(confirmError.message);
+        }
+      } else {
+        // ✅ NEW PURCHASE FLOW (No active subscription)
+        console.log('✅ No active subscription - creating new one');
         const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/create-payment`, {
           method: 'POST',
           headers: {
@@ -118,7 +156,6 @@ const CheckoutForm: React.FC<CustomCheckoutProps> = ({
 
         const { clientSecret } = await response.json();
 
-        // Confirm payment
         if (clientSecret) {
           const { error: confirmError } = await stripe.confirmCardPayment(clientSecret, {
             payment_method: {

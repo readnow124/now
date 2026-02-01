@@ -330,14 +330,21 @@ const BillingPage: React.FC = () => {
 
   const handleResubscribe = async () => {
     if (!subscription?.subscription?.id || !selectedPaymentMethod) return;
+
+    if (subscription.isExpired) {
+      setError('Your subscription has expired. Please purchase a new plan.');
+      setShowResubscribeModal(false);
+      setTimeout(() => navigate('/upgrade'), 1500);
+      return;
+    }
+
     try {
       setResubscribeLoading(true);
       const accessToken = session?.access_token;
-      
+
       const planType = subscription.subscription.plan_type as keyof typeof SUBSCRIPTION_PLANS;
       const userCurrency = (user?.user_metadata?.currency || 'USD') as CurrencyCode;
-      
-      // Fallback: If on trial, reactivate as Monthly
+
       const targetPlan = planType === 'trial' ? 'monthly' : planType;
       const planConfig = SUBSCRIPTION_PLANS[targetPlan] || SUBSCRIPTION_PLANS.monthly;
       const priceId = planConfig.stripePriceIds[userCurrency] || planConfig.stripePriceIds['USD'];
@@ -351,12 +358,18 @@ const BillingPage: React.FC = () => {
         body: JSON.stringify({
           subscriptionId: subscription.subscription.id,
           paymentMethodId: selectedPaymentMethod,
-          priceId: priceId 
+          priceId: priceId
         })
       });
 
       if (!response.ok) {
           const data = await response.json();
+          if (data.error && data.error.includes('expired')) {
+            setError('Your subscription has expired. Redirecting to upgrade page...');
+            setShowResubscribeModal(false);
+            setTimeout(() => navigate('/upgrade'), 1500);
+            return;
+          }
           throw new Error(data.error || 'Failed to reactivate');
       }
 
@@ -464,8 +477,17 @@ const BillingPage: React.FC = () => {
 
   const getPlanDisplayName = (planType: string, status: string) => {
     if (planType === 'trial') {
-        return status === 'canceled' ? 'Free Trial (Cancelled)' : 'Free Trial (Monthly)';
+        return status === 'canceled' ? 'Trial (Cancelled)' : 'Trial';
     }
+
+    const planNames: Record<string, string> = {
+      'monthly': 'Monthly Plan',
+      'semiannual': '6-Month Plan',
+      'annual': 'Annual Plan'
+    };
+
+    const baseName = planNames[planType] || 'Standard Plan';
+    return status === 'canceled' ? `${baseName} (Cancelled)` : baseName;
   };
 
  

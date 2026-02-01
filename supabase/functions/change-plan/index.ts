@@ -1,0 +1,158 @@
+import Stripe from "npm:stripe@18.4.0";
+import { createClient } from "npm:@supabase/supabase-js@2.53.0";
+
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS'
+};
+
+Deno.serve(async (req) => {
+  if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
+
+  try {
+    const authHeader = req.headers.get('Authorization');
+    const supabaseClient = createClient(
+      Deno.env.get('SUPABASE_URL') ?? '',
+      Deno.env.get('SUPABASE_ANON_KEY') ?? '',
+      { global: { headers: { Authorization: authHeader! } } }
+    );
+    const supabaseAdmin = createClient(
+      Deno.env.get('SUPABASE_URL') ?? '',
+      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
+    );
+    const stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY') || '', { apiVersion: '2023-10-16' });
+
+    const { data: { user } } = await supabaseClient.auth.getUser();
+    if (!user) throw new Error('Unauthorized');
+
+    const { newPlanType, newPriceId, paymentMethodId } = await req.json();
+    if (!newPriceId || !newPlanType) throw new Error('Missing required parameters');
+
+    const { data: currentSub } = await supabaseAdmin
+      .from('subscriptions')
+      .select('*')
+      .eq('user_id', user.id)
+      .maybeSingle();
+
+    if (!currentSub) {
+      throw new Error('No subscription found. Please create a new subscription from the upgrade page.');
+    }
+
+    const stripeCustomerId = currentSub.stripe_customer_id;
+    if (!stripeCustomerId) throw new Error('No Stripe customer found');
+
+    if (paymentMethodId) {
+      try {
+        await stripe.paymentMethods.attach(paymentMethodId, { customer: stripeCustomerId });
+        await stripe.customers.update(stripeCustomerId, {
+          invoice_settings: { default_payment_method: paymentMethodId }
+        });
+      } catch (e: any) {
+        if (!e.message.includes('attached')) throw e;
+      }
+    }
+
+    const stripeSubscriptionId = currentSub.stripe_subscription_id;
+    if (!stripeSubscriptionId) {
+      throw new Error('No active Stripe subscription found. Please purchase a new plan from the upgrade page.');
+    }
+
+    let stripeSubscription;
+    try {
+      stripeSubscription = await stripe.subscriptions.retrieve(stripeSubscriptionId);
+    } catch (e) {
+      throw new Error('Stripe subscription not found. Please purchase a new plan from the upgrade page.');
+    }
+
+    const stripeStatus = stripeSubscription.status;
+    const isCanceled = stripeStatus === 'canceled';
+    const isExpired = new Date(stripeSubscription.current_period_end * 1000) <= new Date();
+    const isCurrentlyTrial = currentSub.plan_type === 'trial' || stripeStatus === 'trialing';
+
+    if (isCanceled && isExpired) {
+      console.log('Subscription is canceled and expired - creating new subscription');
+      const newSubscription = await stripe.subscriptions.create({
+        customer: stripeCustomerId,
+        items: [{ price: newPriceId }],
+        default_payment_method: paymentMethodId,
+        metadata: {
+          user_id: user.id,
+          plan_type: newPlanType,
+          is_trial: 'false'
+        }
+      });
+
+      await supabaseAdmin.from('subscriptions').update({
+        plan_type: newPlanType,
+        status: newSubscription.status,
+        stripe_subscription_id: newSubscription.id,
+        current_period_start: new Date(newSubscription.current_period_start * 1000).toISOString(),
+        current_period_end: new Date(newSubscription.current_period_end * 1000).toISOString(),
+        cancel_at_period_end: false,
+        updated_at: new Date().toISOString()
+      }).eq('id', currentSub.id);
+
+      const latestInvoice = await stripe.invoices.retrieve(newSubscription.latest_invoice as string);
+      const clientSecret = (latestInvoice.payment_intent as any)?.client_secret;
+
+      return new Response(JSON.stringify({
+        success: true,
+        requiresPayment: true,
+        clientSecret: clientSecret
+      }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 });
+    }
+
+    console.log('Updating existing subscription');
+    const updateParams: any = {
+      items: [{ id: stripeSubscription.items.data[0].id, price: newPriceId }],
+      metadata: {
+        ...stripeSubscription.metadata,
+        plan_type: newPlanType,
+        is_trial: 'false'
+      }
+    };
+
+    if (isCurrentlyTrial && newPlanType !== 'trial') {
+      console.log('Converting trial to paid plan - charging immediately');
+      updateParams.trial_end = 'now';
+      updateParams.proration_behavior = 'create_prorations';
+    } else {
+      console.log('Switching between paid plans - deferring to period end');
+      updateParams.proration_behavior = 'none';
+    }
+
+    const updatedSubscription = await stripe.subscriptions.update(stripeSubscriptionId, updateParams);
+
+    await supabaseAdmin.from('subscriptions').update({
+      plan_type: newPlanType,
+      status: updatedSubscription.status,
+      current_period_start: new Date(updatedSubscription.current_period_start * 1000).toISOString(),
+      current_period_end: new Date(updatedSubscription.current_period_end * 1000).toISOString(),
+      updated_at: new Date().toISOString()
+    }).eq('id', currentSub.id);
+
+    if (isCurrentlyTrial && newPlanType !== 'trial') {
+      const latestInvoice = await stripe.invoices.retrieve(updatedSubscription.latest_invoice as string);
+      const clientSecret = (latestInvoice.payment_intent as any)?.client_secret;
+
+      return new Response(JSON.stringify({
+        success: true,
+        requiresPayment: true,
+        clientSecret: clientSecret
+      }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 });
+    }
+
+    return new Response(JSON.stringify({
+      success: true,
+      requiresPayment: false
+    }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 });
+
+  } catch (error: any) {
+    console.error('Change plan error:', error);
+    return new Response(JSON.stringify({ error: error.message }), {
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      status: 400
+    });
+  }
+});
