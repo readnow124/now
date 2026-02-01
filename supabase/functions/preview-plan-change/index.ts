@@ -79,11 +79,31 @@ Deno.serve(async (req) => {
     const currentPlanLevel = PLAN_HIERARCHY[currentSub.plan_type as keyof typeof PLAN_HIERARCHY] || 0;
     const newPlanLevel = PLAN_HIERARCHY[newPlanType as keyof typeof PLAN_HIERARCHY] || 0;
     const isUpgrade = newPlanLevel > currentPlanLevel;
+    const isDowngrade = newPlanLevel < currentPlanLevel;
 
     const hasIntervalChange = (currentSub.plan_type === 'monthly' && newPlanType !== 'monthly') ||
                               (currentSub.plan_type !== 'monthly' && newPlanType === 'monthly') ||
                               (currentSub.plan_type === 'semiannual' && newPlanType === 'annual') ||
                               (currentSub.plan_type === 'annual' && newPlanType === 'semiannual');
+
+    const periodEndDate = new Date(stripeSubscription.current_period_end * 1000);
+    const periodEndFormatted = periodEndDate.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+
+    if (isDowngrade) {
+      return new Response(JSON.stringify({
+        isNewSubscription: false,
+        amount: 0,
+        currency: stripeSubscription.currency || 'usd',
+        message: `Your plan will change to ${newPlanType.charAt(0).toUpperCase() + newPlanType.slice(1)} Plan on ${periodEndFormatted}. You'll keep full access to your current plan until then. No charge today.`,
+        changeType: 'downgrade',
+        prorationDate: null,
+        nextBillingDate: periodEndDate.toISOString(),
+        currentPlan: currentSub.plan_type,
+        newPlan: newPlanType,
+        willChargeNow: false,
+        currentPeriodEnd: periodEndDate.toISOString()
+      }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 });
+    }
 
     let upcomingInvoice;
     try {
@@ -108,10 +128,6 @@ Deno.serve(async (req) => {
       } else if (isUpgrade) {
         invoiceParams.subscription_billing_cycle_anchor = 'unchanged';
         invoiceParams.subscription_proration_behavior = 'create_prorations';
-      } else {
-        invoiceParams.subscription_billing_cycle_anchor = 'unchanged';
-        invoiceParams.subscription_proration_behavior = 'none';
-        invoiceParams.subscription_proration_date = stripeSubscription.current_period_end;
       }
 
       upcomingInvoice = await stripe.invoices.retrieveUpcoming(invoiceParams);
@@ -134,14 +150,11 @@ Deno.serve(async (req) => {
       message = `Converting from trial to ${newPlanType} plan.`;
       changeType = 'trial_conversion';
     } else if (hasIntervalChange) {
-      message = `Changing billing interval. New billing cycle starts immediately.`;
+      message = `Changing billing interval. New billing cycle starts immediately with prorated adjustment.`;
       changeType = 'interval_change';
     } else if (isUpgrade) {
-      message = `Upgrading from ${currentSub.plan_type} to ${newPlanType}. You'll be charged the prorated difference.`;
+      message = `Upgrading to ${newPlanType.charAt(0).toUpperCase() + newPlanType.slice(1)} Plan. You'll be charged the prorated difference based on your remaining billing period.`;
       changeType = 'upgrade';
-    } else {
-      message = `Downgrading to ${newPlanType}. Change takes effect at the end of your current billing period.`;
-      changeType = 'downgrade';
     }
 
     return new Response(JSON.stringify({
@@ -155,7 +168,7 @@ Deno.serve(async (req) => {
       currentPlan: currentSub.plan_type,
       newPlan: newPlanType,
       willChargeNow: isCurrentlyTrial || isUpgrade || hasIntervalChange,
-      currentPeriodEnd: new Date(stripeSubscription.current_period_end * 1000).toISOString()
+      currentPeriodEnd: periodEndDate.toISOString()
     }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 });
 
   } catch (error: any) {

@@ -11,7 +11,7 @@ import {
   Package, Tablet, CheckCircle2, Clock, AlertCircle,
   MapPin, ChevronRight, X, CreditCard,
   Loader2, ArrowRight, ShieldCheck, Zap, Calendar,
-  Gift, ZoomIn
+  Gift, ZoomIn, Plus, Check
 } from 'lucide-react';
 import { loadStripe } from '@stripe/stripe-js';
 import { Elements, CardElement, useStripe, useElements } from '@stripe/react-stripe-js';
@@ -101,6 +101,11 @@ function StarterPackContent() {
 
   const [selectedHistoryOrder, setSelectedHistoryOrder] = useState<StarterPackOrder | null>(null);
 
+  const [paymentMethods, setPaymentMethods] = useState<any[]>([]);
+  const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<string>('');
+  const [showNewCardForm, setShowNewCardForm] = useState(false);
+  const [loadingPaymentMethods, setLoadingPaymentMethods] = useState(false);
+
   const tabletDisplayPrice = StarterPackService.getTabletCost(operatingCurrency);
 
   useEffect(() => {
@@ -118,6 +123,65 @@ function StarterPackContent() {
   useEffect(() => {
     if (user) calculateCost();
   }, [includesTablet, hasAccess, user, operatingCurrency]);
+
+  useEffect(() => {
+    if (pendingAddress && totalCost > 0) {
+      loadPaymentMethods();
+    }
+  }, [pendingAddress]);
+
+  const loadPaymentMethods = async () => {
+    setLoadingPaymentMethods(true);
+    try {
+      const subscriptionData = await SubscriptionService.getUserSubscription(user!.id);
+      if (!subscriptionData?.stripe_customer_id) {
+        setShowNewCardForm(true);
+        setLoadingPaymentMethods(false);
+        return;
+      }
+
+      const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/get-payment-methods`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ customerId: subscriptionData.stripe_customer_id })
+      });
+
+      if (response.ok) {
+        const { paymentMethods: methods } = await response.json();
+
+        const uniqueMethods: any[] = [];
+        const seenCards = new Set();
+        (methods || []).forEach((method: any) => {
+          const cardKey = `${method.card?.brand}-${method.card?.last4}`;
+          if (!seenCards.has(cardKey)) {
+            seenCards.add(cardKey);
+            uniqueMethods.push(method);
+          }
+        });
+
+        setPaymentMethods(uniqueMethods);
+
+        const defaultMethod = uniqueMethods.find(m => m.is_default);
+        if (defaultMethod) {
+          setSelectedPaymentMethod(defaultMethod.id);
+        } else if (uniqueMethods.length > 0) {
+          setSelectedPaymentMethod(uniqueMethods[0].id);
+        } else {
+          setShowNewCardForm(true);
+        }
+      } else {
+        setShowNewCardForm(true);
+      }
+    } catch (err) {
+      console.error('Error loading payment methods:', err);
+      setShowNewCardForm(true);
+    } finally {
+      setLoadingPaymentMethods(false);
+    }
+  };
 
   const checkAccess = async () => {
     try {
@@ -193,10 +257,32 @@ function StarterPackContent() {
       );
 
       if (safeAmountInCents > 0) {
-        if (!stripe || !elements) throw new Error('Payment system not ready');
-        
+        if (!stripe) throw new Error('Payment system not ready');
+
         const { data: { session } } = await supabase.auth.getSession();
-        
+
+        let paymentMethodId = selectedPaymentMethod;
+
+        if (showNewCardForm || !selectedPaymentMethod) {
+          if (!elements) throw new Error('Payment system not ready');
+          const cardElement = elements.getElement(CardElement);
+          if (!cardElement) throw new Error('Card element not found');
+
+          const { error: paymentMethodError, paymentMethod } = await stripe.createPaymentMethod({
+            type: 'card',
+            card: cardElement,
+            billing_details: {
+              email: user!.email,
+            },
+          });
+
+          if (paymentMethodError) {
+            throw new Error(paymentMethodError.message);
+          }
+
+          paymentMethodId = paymentMethod.id;
+        }
+
         const response = await fetch(
           `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/create-starterpack-payment`,
           {
@@ -206,25 +292,31 @@ function StarterPackContent() {
               "Authorization": `Bearer ${session?.access_token}`,
             },
             body: JSON.stringify({
-              amount: safeAmountInCents, 
-              currency: operatingCurrency, 
+              amount: safeAmountInCents,
+              currency: operatingCurrency,
               metadata: { orderId: order.id, orderType: "starter_pack" },
+              paymentMethodId: paymentMethodId
             })
           }
         );
 
         if (!response.ok) throw new Error('Payment initialization failed');
         const { clientSecret } = await response.json();
-        
-        const cardElement = elements.getElement(CardElement);
-        if (!cardElement) throw new Error('Card element not found');
 
-        const { error: stripeError, paymentIntent } = await stripe.confirmCardPayment(clientSecret, {
-          payment_method: { card: cardElement }
-        });
-
-        if (stripeError) throw new Error(stripeError.message);
-        await StarterPackService.updateOrderPaymentStatus(order.id, paymentIntent!.id, 'completed');
+        if (showNewCardForm || !selectedPaymentMethod) {
+          const cardElement = elements!.getElement(CardElement);
+          const { error: stripeError, paymentIntent } = await stripe.confirmCardPayment(clientSecret, {
+            payment_method: { card: cardElement! }
+          });
+          if (stripeError) throw new Error(stripeError.message);
+          await StarterPackService.updateOrderPaymentStatus(order.id, paymentIntent!.id, 'completed');
+        } else {
+          const { error: stripeError, paymentIntent } = await stripe.confirmCardPayment(clientSecret, {
+            payment_method: paymentMethodId
+          });
+          if (stripeError) throw new Error(stripeError.message);
+          await StarterPackService.updateOrderPaymentStatus(order.id, paymentIntent!.id, 'completed');
+        }
       }
 
       await loadOrders();
@@ -338,12 +430,68 @@ function StarterPackContent() {
                  </div>
               </div>
 
-              <div className="space-y-4">
-                 <label className="text-xs font-bold text-gray-400 uppercase tracking-widest ml-1">Card Details</label>
-                 <div className="bg-white border-2 border-gray-100 rounded-2xl p-4 focus-within:border-[#E85A9B] transition-colors">
-                    <CardElement options={CARD_ELEMENT_OPTIONS} />
-                 </div>
-              </div>
+              {loadingPaymentMethods ? (
+                <div className="flex items-center justify-center py-8">
+                  <Loader2 className="w-8 h-8 animate-spin text-[#E85A9B]" />
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  <label className="text-xs font-bold text-gray-400 uppercase tracking-widest ml-1">Payment Method</label>
+
+                  {!showNewCardForm && paymentMethods.length > 0 ? (
+                    <div className="space-y-3">
+                      {paymentMethods.map((method) => (
+                        <button
+                          key={method.id}
+                          type="button"
+                          onClick={() => setSelectedPaymentMethod(method.id)}
+                          className={`w-full p-4 rounded-xl border-2 flex items-center gap-4 transition-all text-left ${
+                            selectedPaymentMethod === method.id
+                              ? 'border-[#E85A9B] bg-white ring-4 ring-[#E85A9B]/10'
+                              : 'border-gray-200 bg-gray-50 hover:bg-gray-100'
+                          }`}
+                        >
+                          <div className="w-12 h-8 bg-slate-800 rounded-md flex items-center justify-center text-white font-bold text-[9px] uppercase tracking-wider">
+                            {method.card?.brand || 'CARD'}
+                          </div>
+                          <div className="flex-1">
+                            <p className="font-bold text-gray-700">•••• {method.card?.last4}</p>
+                            <p className="text-xs text-gray-500">Exp: {method.card?.exp_month}/{method.card?.exp_year}</p>
+                          </div>
+                          {method.is_default && (
+                            <span className="text-[10px] font-bold bg-blue-100 text-blue-700 px-2 py-1 rounded-full">Default</span>
+                          )}
+                          {selectedPaymentMethod === method.id && <Check className="w-5 h-5 text-[#E85A9B]" />}
+                        </button>
+                      ))}
+
+                      <button
+                        type="button"
+                        onClick={() => setShowNewCardForm(true)}
+                        className="w-full p-4 rounded-xl border-2 border-dashed border-gray-300 flex items-center justify-center gap-2 text-gray-600 hover:border-[#E85A9B] hover:text-[#E85A9B] transition-all"
+                      >
+                        <Plus className="w-5 h-5" />
+                        <span className="font-medium">Add New Card</span>
+                      </button>
+                    </div>
+                  ) : (
+                    <div>
+                      {paymentMethods.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => setShowNewCardForm(false)}
+                          className="text-sm text-[#E85A9B] hover:underline mb-3"
+                        >
+                          ← Use saved card
+                        </button>
+                      )}
+                      <div className="bg-white border-2 border-gray-100 rounded-2xl p-4 focus-within:border-[#E85A9B] transition-colors">
+                        <CardElement options={CARD_ELEMENT_OPTIONS} />
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
 
               {error && (
                 <div className="p-4 bg-red-50 text-red-600 rounded-2xl text-sm font-bold flex items-center gap-2">

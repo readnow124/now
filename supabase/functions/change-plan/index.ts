@@ -157,14 +157,21 @@ Deno.serve(async (req) => {
 
     const updatedSubscription = await stripe.subscriptions.update(stripeSubscriptionId, updateParams);
 
-    await supabaseAdmin.from('subscriptions').update({
-      plan_type: newPlanType,
+    const isDowngrade = newPlanLevel < currentPlanLevel && !hasIntervalChange;
+
+    const dbUpdate: any = {
       status: updatedSubscription.status,
       current_period_start: new Date(updatedSubscription.current_period_start * 1000).toISOString(),
       current_period_end: new Date(updatedSubscription.current_period_end * 1000).toISOString(),
       cancel_at_period_end: false,
       updated_at: new Date().toISOString()
-    }).eq('id', currentSub.id);
+    };
+
+    if (!isDowngrade) {
+      dbUpdate.plan_type = newPlanType;
+    }
+
+    await supabaseAdmin.from('subscriptions').update(dbUpdate).eq('id', currentSub.id);
 
     if (isCurrentlyTrial || isUpgrade || hasIntervalChange) {
       const latestInvoice = await stripe.invoices.retrieve(updatedSubscription.latest_invoice as string);

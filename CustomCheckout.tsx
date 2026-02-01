@@ -353,9 +353,9 @@ const CheckoutForm: React.FC<CustomCheckoutProps> = ({
         ) : previewData ? (
           <div className="mt-2">
             <p className="text-2xl font-bold text-gray-900">
-              {formatAmount(previewData.amount, previewData.currency)}
+              {previewData.changeType === 'downgrade' ? 'No Charge Today' : formatAmount(previewData.amount, previewData.currency)}
             </p>
-            <p className="text-xs text-gray-500 mt-1">{previewData.message}</p>
+            <p className="text-xs text-gray-500 mt-1 leading-relaxed">{previewData.message}</p>
           </div>
         ) : (
           <p className="text-sm text-gray-500 mt-1">
@@ -368,6 +368,21 @@ const CheckoutForm: React.FC<CustomCheckoutProps> = ({
         <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-xl flex items-center gap-3 text-sm">
           <AlertCircle className="h-5 w-5 shrink-0" />
           {error}
+        </div>
+      )}
+
+      {previewData && previewData.changeType === 'downgrade' && (
+        <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
+          <div className="flex items-start gap-3">
+            <Shield className="h-5 w-5 text-blue-600 shrink-0 mt-0.5" />
+            <div>
+              <p className="text-sm font-bold text-blue-900">Downgrade Scheduled</p>
+              <p className="text-xs text-blue-700 mt-1 leading-relaxed">
+                Your plan change will take effect at the end of your current billing period.
+                You'll continue to have full access to all features of your current plan until then.
+              </p>
+            </div>
+          </div>
         </div>
       )}
 
@@ -517,6 +532,11 @@ const CheckoutForm: React.FC<CustomCheckoutProps> = ({
               <>
                 <Zap className="h-4 w-4 fill-current" />
                 Activate Free Trial
+              </>
+            ) : previewData && previewData.changeType === 'downgrade' ? (
+              <>
+                <Check className="h-4 w-4" />
+                Confirm Change
               </>
             ) : previewData && previewData.amount > 0 ? (
               <>
