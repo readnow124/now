@@ -129,7 +129,7 @@ Deno.serve(async (req) => {
       hasIntervalChange
     });
 
-    if (isDowngrade && !hasIntervalChange) {
+    if (isDowngrade) {
       console.log('Downgrade detected - storing pending change, no Stripe update');
 
       await supabaseAdmin.from('subscriptions').update({

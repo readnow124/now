@@ -525,7 +525,12 @@ const CheckoutForm: React.FC<CustomCheckoutProps> = ({
         </button>
         <button
           type="submit"
-          disabled={!stripe || loading || (!showNewCardForm && !selectedPaymentMethod)}
+          disabled={
+            !stripe ||
+            loading ||
+            loadingPaymentMethods ||
+            (previewData?.changeType !== 'downgrade' && !showNewCardForm && !selectedPaymentMethod)
+          }
           className={`flex-[2] py-3 px-4 text-white rounded-xl hover:shadow-lg transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 font-bold ${
             isTrial
               ? 'bg-gradient-to-r from-blue-600 to-indigo-600'

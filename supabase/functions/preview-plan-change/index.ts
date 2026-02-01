@@ -81,11 +81,6 @@ Deno.serve(async (req) => {
     const isUpgrade = newPlanLevel > currentPlanLevel;
     const isDowngrade = newPlanLevel < currentPlanLevel;
 
-    const hasIntervalChange = (currentSub.plan_type === 'monthly' && newPlanType !== 'monthly') ||
-                              (currentSub.plan_type !== 'monthly' && newPlanType === 'monthly') ||
-                              (currentSub.plan_type === 'semiannual' && newPlanType === 'annual') ||
-                              (currentSub.plan_type === 'annual' && newPlanType === 'semiannual');
-
     const periodEndDate = new Date(stripeSubscription.current_period_end * 1000);
     const periodEndFormatted = periodEndDate.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
 
@@ -104,6 +99,11 @@ Deno.serve(async (req) => {
         currentPeriodEnd: periodEndDate.toISOString()
       }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 });
     }
+
+    const hasIntervalChange = (currentSub.plan_type === 'monthly' && newPlanType !== 'monthly') ||
+                              (currentSub.plan_type !== 'monthly' && newPlanType === 'monthly') ||
+                              (currentSub.plan_type === 'semiannual' && newPlanType === 'annual') ||
+                              (currentSub.plan_type === 'annual' && newPlanType === 'semiannual');
 
     let upcomingInvoice;
     try {
