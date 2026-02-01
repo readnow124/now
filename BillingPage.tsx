@@ -307,8 +307,7 @@ const BillingPage: React.FC = () => {
 
   useEffect(() => {
     const handleSubscriptionUpdate = () => {
-      setTimeout(() => loadBillingData(), 500);
-      setTimeout(() => loadBillingData(), 5000);
+      loadBillingData();
     };
     window.addEventListener('subscription-updated', handleSubscriptionUpdate);
     return () => window.removeEventListener('subscription-updated', handleSubscriptionUpdate);

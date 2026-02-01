@@ -105,9 +105,6 @@ const UpgradePage: React.FC = () => {
     await loadCurrentSubscription();
     window.dispatchEvent(new CustomEvent('subscription-updated'));
     navigate('/dashboard', { state: { paymentSuccess: true } });
-    
-    setTimeout(() => window.dispatchEvent(new CustomEvent('subscription-updated')), 3000);
-    setTimeout(() => window.dispatchEvent(new CustomEvent('subscription-updated')), 8000);
   };
 
   const handlePaymentCancel = () => {

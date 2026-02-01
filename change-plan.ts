@@ -7,6 +7,13 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS'
 };
 
+const PLAN_HIERARCHY = {
+  'trial': 0,
+  'monthly': 1,
+  'semiannual': 2,
+  'annual': 3
+};
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
 
@@ -103,7 +110,17 @@ Deno.serve(async (req) => {
       }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 });
     }
 
-    console.log('Updating existing subscription');
+    const currentPlanLevel = PLAN_HIERARCHY[currentSub.plan_type as keyof typeof PLAN_HIERARCHY] || 0;
+    const newPlanLevel = PLAN_HIERARCHY[newPlanType as keyof typeof PLAN_HIERARCHY] || 0;
+    const isUpgrade = newPlanLevel > currentPlanLevel;
+
+    console.log('Plan change detected:', {
+      from: currentSub.plan_type,
+      to: newPlanType,
+      isUpgrade,
+      isTrial: isCurrentlyTrial
+    });
+
     const updateParams: any = {
       items: [{ id: stripeSubscription.items.data[0].id, price: newPriceId }],
       metadata: {
@@ -117,9 +134,15 @@ Deno.serve(async (req) => {
       console.log('Converting trial to paid plan - charging immediately');
       updateParams.trial_end = 'now';
       updateParams.proration_behavior = 'create_prorations';
+      updateParams.billing_cycle_anchor = 'now';
+    } else if (isUpgrade) {
+      console.log('Upgrading plan - prorating and charging immediately, maintaining billing cycle');
+      updateParams.proration_behavior = 'create_prorations';
+      updateParams.billing_cycle_anchor = 'unchanged';
     } else {
-      console.log('Switching between paid plans - deferring to period end');
+      console.log('Downgrading plan - scheduling change for next billing period');
       updateParams.proration_behavior = 'none';
+      updateParams.billing_cycle_anchor = 'unchanged';
     }
 
     const updatedSubscription = await stripe.subscriptions.update(stripeSubscriptionId, updateParams);
@@ -129,23 +152,28 @@ Deno.serve(async (req) => {
       status: updatedSubscription.status,
       current_period_start: new Date(updatedSubscription.current_period_start * 1000).toISOString(),
       current_period_end: new Date(updatedSubscription.current_period_end * 1000).toISOString(),
+      cancel_at_period_end: false,
       updated_at: new Date().toISOString()
     }).eq('id', currentSub.id);
 
-    if (isCurrentlyTrial && newPlanType !== 'trial') {
+    if (isCurrentlyTrial || isUpgrade) {
       const latestInvoice = await stripe.invoices.retrieve(updatedSubscription.latest_invoice as string);
       const clientSecret = (latestInvoice.payment_intent as any)?.client_secret;
 
-      return new Response(JSON.stringify({
-        success: true,
-        requiresPayment: true,
-        clientSecret: clientSecret
-      }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 });
+      if (clientSecret) {
+        return new Response(JSON.stringify({
+          success: true,
+          requiresPayment: true,
+          clientSecret: clientSecret,
+          message: isUpgrade ? 'Plan upgraded. You\'ll be charged the prorated difference.' : 'Trial converted to paid plan.'
+        }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 });
+      }
     }
 
     return new Response(JSON.stringify({
       success: true,
-      requiresPayment: false
+      requiresPayment: false,
+      message: 'Plan change will take effect at the end of your current billing period.'
     }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 });
 
   } catch (error: any) {

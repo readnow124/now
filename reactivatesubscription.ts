@@ -33,16 +33,21 @@ Deno.serve(async (req) => {
       throw new Error('Subscription has expired. Please purchase a new plan from the upgrade page.');
     }
 
-    let stripeStatus = 'unknown';
+    if (!currentSub.stripe_subscription_id) {
+      throw new Error('No Stripe subscription found. Please purchase a new plan from the upgrade page.');
+    }
+
+    let stripeSubscription;
     try {
-      const s = await stripe.subscriptions.retrieve(currentSub.stripe_subscription_id);
-      stripeStatus = s.status;
+      stripeSubscription = await stripe.subscriptions.retrieve(currentSub.stripe_subscription_id);
     } catch {
       throw new Error('Subscription not found in Stripe. Please purchase a new plan from the upgrade page.');
     }
 
-    if (stripeStatus === 'active' || stripeStatus === 'trialing' || stripeStatus === 'canceled') {
-      console.log('✅ Resuming auto-renewal - no charge');
+    const stripeStatus = stripeSubscription.status;
+
+    if (stripeStatus === 'active' || stripeStatus === 'trialing') {
+      console.log('✅ Resuming auto-renewal for active/trialing subscription - no charge');
       await stripe.subscriptions.update(currentSub.stripe_subscription_id, {
         cancel_at_period_end: false,
         default_payment_method: paymentMethodId
@@ -51,6 +56,31 @@ Deno.serve(async (req) => {
       await supabaseClient.from('subscriptions').update({
         status: 'active',
         cancel_at_period_end: false,
+        updated_at: new Date().toISOString()
+      }).eq('id', subscriptionId);
+    } else if (stripeStatus === 'canceled') {
+      console.log('⚠️ Subscription is fully canceled - creating new subscription with remaining time');
+      const remainingSeconds = Math.floor((periodEnd.getTime() - now.getTime()) / 1000);
+      const trialEnd = remainingSeconds > 0 ? Math.floor(periodEnd.getTime() / 1000) : undefined;
+
+      const newSubscription = await stripe.subscriptions.create({
+        customer: currentSub.stripe_customer_id,
+        items: [{ price: priceId }],
+        default_payment_method: paymentMethodId,
+        trial_end: trialEnd,
+        metadata: {
+          user_id: user.id,
+          plan_type: currentSub.plan_type,
+          is_trial: String(currentSub.plan_type === 'trial')
+        }
+      });
+
+      await supabaseClient.from('subscriptions').update({
+        status: 'active',
+        stripe_subscription_id: newSubscription.id,
+        cancel_at_period_end: false,
+        current_period_start: new Date(newSubscription.current_period_start * 1000).toISOString(),
+        current_period_end: new Date(newSubscription.current_period_end * 1000).toISOString(),
         updated_at: new Date().toISOString()
       }).eq('id', subscriptionId);
     } else {
