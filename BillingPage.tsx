@@ -341,10 +341,10 @@ const BillingPage: React.FC = () => {
       setResubscribeLoading(true);
       const accessToken = session?.access_token;
 
-      const planType = subscription.subscription.plan_type as keyof typeof SUBSCRIPTION_PLANS;
+      const planType = subscription.subscription.plan_type;
       const userCurrency = (user?.user_metadata?.currency || 'USD') as CurrencyCode;
 
-      const targetPlan = planType === 'trial' ? 'monthly' : planType;
+      const targetPlan = (planType === 'trial' ? 'monthly' : planType) as keyof typeof SUBSCRIPTION_PLANS;
       const planConfig = SUBSCRIPTION_PLANS[targetPlan] || SUBSCRIPTION_PLANS.monthly;
       const priceId = planConfig.stripePriceIds[userCurrency] || planConfig.stripePriceIds['USD'];
 

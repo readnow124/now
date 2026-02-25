@@ -11,6 +11,7 @@ import { useAuth } from '../contexts/AuthContext';
 import CustomCheckout from './CustomCheckout';
 import { useCurrency } from '../contexts/CurrencyContext';
 import { SUBSCRIPTION_PLANS } from '../constants/currencyConfig';
+import { supabase } from '../lib/supabase';
 
 const UpgradePage: React.FC = () => {
   const [currentSubscription, setCurrentSubscription] = useState<any>(null);
@@ -110,7 +111,7 @@ const UpgradePage: React.FC = () => {
     }
 
     try {
-      const { data: { session } } = await SubscriptionService['supabase'].auth.getSession();
+      const { data: { session } } = await supabase.auth.getSession();
       if (!session?.access_token) return;
 
       const pricesMap: Record<string, any> = {};

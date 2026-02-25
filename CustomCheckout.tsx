@@ -215,7 +215,7 @@ const CheckoutForm: React.FC<CustomCheckoutProps> = ({
 
       const subscriptionData = await SubscriptionService.getUserSubscription(user.id);
       const hasActiveSubscription = subscriptionData &&
-        (subscriptionData.status === 'active' || subscriptionData.status === 'trialing' || subscriptionData.status === 'canceled');
+        (subscriptionData.status === 'active' || subscriptionData.status === 'trialing' || subscriptionData.status === 'cancelled');
 
       const { data: { session }, error: sessionError } = await supabase.auth.getSession();
       if (sessionError || !session?.access_token) {
