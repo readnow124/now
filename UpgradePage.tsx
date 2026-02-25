@@ -106,17 +106,29 @@ const UpgradePage: React.FC = () => {
 
   const loadProratedPrices = async () => {
     const { subscription } = currentSubscription;
-    if (!subscription || subscription.plan_type === 'trial' || subscription.status === 'trialing') {
+    if (!subscription) {
+      console.log('No subscription found, skipping prorated prices');
       return;
     }
 
+    if (subscription.plan_type === 'trial' || subscription.status === 'trialing') {
+      console.log('Trial subscription, skipping prorated prices');
+      return;
+    }
+
+    console.log('Loading prorated prices for plan:', subscription.plan_type);
+
     try {
       const { data: { session } } = await supabase.auth.getSession();
-      if (!session?.access_token) return;
+      if (!session?.access_token) {
+        console.log('No session, skipping prorated prices');
+        return;
+      }
 
       const pricesMap: Record<string, any> = {};
 
       for (const plan of plans) {
+        console.log(`Fetching prorated price for ${plan.planId}...`);
         const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/preview-plan-change`, {
           method: 'POST',
           headers: {
@@ -131,10 +143,15 @@ const UpgradePage: React.FC = () => {
 
         if (response.ok) {
           const preview = await response.json();
+          console.log(`Prorated preview for ${plan.planId}:`, preview);
           pricesMap[plan.planId] = preview;
+        } else {
+          const error = await response.json();
+          console.error(`Failed to get prorated price for ${plan.planId}:`, error);
         }
       }
 
+      console.log('Final prorated prices map:', pricesMap);
       setProratedPrices(pricesMap);
     } catch (error) {
       console.error('Error loading prorated prices:', error);

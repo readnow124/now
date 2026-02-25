@@ -133,6 +133,7 @@ const CheckoutForm: React.FC<CustomCheckoutProps> = ({
 
   const loadPricePreview = async () => {
     if (isTrial) {
+      console.log('Trial mode - no preview needed');
       setPreviewData({
         amount: 0,
         currency: 'usd',
@@ -141,10 +142,15 @@ const CheckoutForm: React.FC<CustomCheckoutProps> = ({
       return;
     }
 
+    console.log('Loading price preview for plan:', plan.planId, 'priceId:', priceId);
+
     try {
       setLoadingPreview(true);
       const { data: { session } } = await supabase.auth.getSession();
-      if (!session?.access_token) return;
+      if (!session?.access_token) {
+        console.log('No session found for preview');
+        return;
+      }
 
       const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/preview-plan-change`, {
         method: 'POST',
@@ -160,7 +166,11 @@ const CheckoutForm: React.FC<CustomCheckoutProps> = ({
 
       if (response.ok) {
         const preview = await response.json();
+        console.log('Preview loaded successfully:', preview);
         setPreviewData(preview);
+      } else {
+        const error = await response.json();
+        console.error('Preview failed:', error);
       }
     } catch (err) {
       console.error('Error loading price preview:', err);
