@@ -384,6 +384,25 @@ const BillingPage: React.FC = () => {
   // ... (Keep handleRemovePaymentMethod, handleSetDefaultPaymentMethod, handleDownloadInvoice, formatDate)
   const handleRemovePaymentMethod = async () => {
     if (!deletePaymentMethodId) return;
+
+    const methodToDelete = paymentMethods.find(m => m.id === deletePaymentMethodId);
+    const isActiveSubscription = subscription?.subscription?.status === 'active' ||
+                                  subscription?.subscription?.status === 'trialing';
+    const isLastCard = paymentMethods.length === 1;
+    const isDeletingDefaultCard = methodToDelete?.is_default;
+
+    if (isActiveSubscription && isLastCard) {
+      setError('Cannot remove the only payment method with an active subscription. Please add another card first or cancel your subscription.');
+      setDeletePaymentMethodId(null);
+      return;
+    }
+
+    if (isActiveSubscription && isDeletingDefaultCard && paymentMethods.length > 1) {
+      setError('Cannot remove the default payment method with an active subscription. Please set another card as default first.');
+      setDeletePaymentMethodId(null);
+      return;
+    }
+
     try {
       setActionLoading(`remove-${deletePaymentMethodId}`);
       const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/detach-payment-method`, {

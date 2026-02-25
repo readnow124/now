@@ -43,10 +43,11 @@ Deno.serve(async (req) => {
       .maybeSingle();
 
     if (!currentSub || !currentSub.stripe_subscription_id) {
+      const price = await stripe.prices.retrieve(newPriceId);
       return new Response(JSON.stringify({
         isNewSubscription: true,
-        amount: 0,
-        currency: 'usd',
+        amount: price.unit_amount || 0,
+        currency: price.currency || 'usd',
         message: 'This will be a new subscription.',
         prorationDate: null,
         nextBillingDate: null
@@ -66,10 +67,11 @@ Deno.serve(async (req) => {
     const isCurrentlyTrial = currentSub.plan_type === 'trial' || stripeStatus === 'trialing';
 
     if (isCanceled && isExpired) {
+      const price = await stripe.prices.retrieve(newPriceId);
       return new Response(JSON.stringify({
         isNewSubscription: true,
-        amount: 0,
-        currency: stripeSubscription.currency || 'usd',
+        amount: price.unit_amount || 0,
+        currency: price.currency || stripeSubscription.currency || 'usd',
         message: 'Your subscription has expired. This will create a new subscription.',
         prorationDate: null,
         nextBillingDate: null
