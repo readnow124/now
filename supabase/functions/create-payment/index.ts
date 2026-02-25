@@ -103,18 +103,26 @@ Deno.serve(async (req) => {
     }
 
     // --- 4. DB WRITE (CRITICAL FIX) ---
+    let periodEnd = new Date(subscription.current_period_end * 1000).toISOString();
+    let trialEndIso = null;
+    if (subscription.status === 'trialing' && subscription.trial_end) {
+        trialEndIso = new Date(subscription.trial_end * 1000).toISOString();
+        periodEnd = trialEndIso;
+    }
+
     const subData: any = {
         user_id: user.id,
-        plan_type: finalPlanType, // ✅ STRICTLY ENFORCED
+        plan_type: finalPlanType,
         status: subscription.status,
         stripe_subscription_id: subscription.id,
         stripe_customer_id: stripeCustomerId,
         current_period_start: new Date(subscription.current_period_start * 1000).toISOString(),
-        current_period_end: new Date(subscription.current_period_end * 1000).toISOString(),
+        current_period_end: periodEnd,
         cancel_at_period_end: subscription.cancel_at_period_end,
+        trial_end: trialEndIso,
         updated_at: new Date().toISOString()
     };
-    if (cardFingerprint) subData.card_fingerprint = cardFingerprint; // Always save fingerprint
+    if (cardFingerprint) subData.card_fingerprint = cardFingerprint;
 
     if (dbSub) { await supabaseAdmin.from('subscriptions').update(subData).eq('id', dbSub.id); }
     else { await supabaseAdmin.from('subscriptions').insert(subData); }

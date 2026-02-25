@@ -628,9 +628,11 @@ const BillingPage: React.FC = () => {
                      <div className="flex items-center gap-2">
                         <Clock className={`w-4 h-4 ${isCancelled || isTrial ? 'text-amber-500' : 'text-gray-400'}`} />
                         <p className={`font-bold ${isCancelled ? 'text-red-600' : 'text-gray-900'}`}>
-                           {subscription?.subscription?.current_period_end
-                              ? formatDate(subscription.subscription.current_period_end)
-                              : 'N/A'}
+                           {isTrial && subscription?.subscription?.trial_end
+                              ? formatDate(subscription.subscription.trial_end)
+                              : subscription?.subscription?.current_period_end
+                                ? formatDate(subscription.subscription.current_period_end)
+                                : 'N/A'}
                         </p>
                      </div>
                   </div>

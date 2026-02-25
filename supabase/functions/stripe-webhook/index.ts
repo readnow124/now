@@ -235,7 +235,15 @@ async function persistInvoiceToDatabase(invoice, stripe, supabase) {
 }
 function calculatePeriodFromStripe(subscription, planType) {
   const start = new Date(subscription.current_period_start * 1000);
-  const end = new Date(subscription.current_period_end * 1000);
+  let end = new Date(subscription.current_period_end * 1000);
+  let trialEnd = null;
+
+  if (subscription.status === 'trialing' && subscription.trial_end) {
+    trialEnd = new Date(subscription.trial_end * 1000);
+    end = trialEnd;
+    console.log('Using trial_end as period end for trialing subscription:', trialEnd.toISOString());
+  }
+
   const durationDays = Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
   let isAccurate = true;
   switch(planType){
@@ -258,11 +266,13 @@ function calculatePeriodFromStripe(subscription, planType) {
     end: end.toISOString(),
     durationDays,
     isAccurate,
+    trialEnd: trialEnd?.toISOString() || null,
     source: 'stripe_subscription'
   });
   return {
     start,
     end,
+    trialEnd,
     source: 'stripe_subscription',
     durationDays,
     isAccurate
@@ -352,6 +362,7 @@ async function handleCheckoutCompleted(event, stripe, supabase) {
       console.error('Database error in checkout completion:', error);
       throw error;
     }
+    await updateTrialEndInDb(supabase, userId, periodCalculation.trialEnd);
     console.log('Checkout completion processed successfully:', {
       result,
       periodSource: periodCalculation.source,
@@ -505,6 +516,7 @@ async function handleInvoiceEvent(event, stripe, supabase) {
       console.error('Database error in invoice processing:', error);
       throw error;
     }
+    await updateTrialEndInDb(supabase, userId, periodCalculation.trialEnd);
     console.log('Invoice processed successfully:', {
       result,
       periodSource: periodCalculation.source,
@@ -679,6 +691,7 @@ async function handleSubscriptionUpdated(event, stripe, supabase) {
       console.error('Database error in subscription update:', error);
       throw error;
     }
+    await updateTrialEndInDb(supabase, userId, periodCalculation.trialEnd);
     console.log('Subscription update processed successfully:', {
       result,
       statusChange: status,
@@ -760,5 +773,19 @@ async function handleSubscriptionDeleted(event, stripe, supabase) {
       action: 'subscription_deleted',
       error: error.message
     };
+  }
+}
+async function updateTrialEndInDb(supabase, userId, trialEnd) {
+  if (!userId) return;
+  const trialEndValue = trialEnd ? trialEnd.toISOString() : null;
+  try {
+    await supabase.from('subscriptions')
+      .update({ trial_end: trialEndValue })
+      .eq('user_id', userId);
+    if (trialEnd) {
+      console.log(`Updated trial_end for user ${userId}: ${trialEndValue}`);
+    }
+  } catch (e) {
+    console.error('Error updating trial_end:', e);
   }
 }

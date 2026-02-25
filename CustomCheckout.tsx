@@ -403,7 +403,7 @@ const CheckoutForm: React.FC<CustomCheckoutProps> = ({
             <p className="text-xs text-gray-600">{plan.description}</p>
           </div>
           <div className="text-right">
-            {previewData && previewData.changeType === 'upgrade' && previewData.isProrated ? (
+            {previewData && (previewData.changeType === 'upgrade' || previewData.changeType === 'interval_change' || previewData.changeType === 'trial_conversion') && previewData.isProrated ? (
               <div>
                 <p className="text-xs text-gray-500 line-through">{plan.price}</p>
                 <p className="text-2xl font-bold text-gray-900">

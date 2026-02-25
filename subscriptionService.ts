@@ -16,6 +16,7 @@ export interface Subscription {
   billing_period_accurate?: boolean;
   cancel_at_period_end?: boolean;
   card_fingerprint?: string;
+  trial_end?: string;
 }
 
 export interface PlanFeatures {
@@ -225,8 +226,9 @@ export class SubscriptionService {
           *,
           billing_period_text,
           billing_period_accurate,
-          cancel_at_period_end
-        `) 
+          cancel_at_period_end,
+          trial_end
+        `)
         .eq('user_id', userId)
         .order('created_at', { ascending: false })
         .maybeSingle();
