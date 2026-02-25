@@ -170,7 +170,8 @@ Deno.serve(async (req) => {
       currentPlan: currentSub.plan_type,
       newPlan: newPlanType,
       willChargeNow: isCurrentlyTrial || isUpgrade || hasIntervalChange,
-      currentPeriodEnd: periodEndDate.toISOString()
+      currentPeriodEnd: periodEndDate.toISOString(),
+      isProrated: isUpgrade || hasIntervalChange
     }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 });
 
   } catch (error: any) {

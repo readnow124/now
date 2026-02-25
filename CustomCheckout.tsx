@@ -393,16 +393,28 @@ const CheckoutForm: React.FC<CustomCheckoutProps> = ({
             <p className="text-xs text-gray-600">{plan.description}</p>
           </div>
           <div className="text-right">
-            <p className="text-2xl font-bold text-gray-900">
-              {previewData && previewData.changeType === 'downgrade'
-                ? 'No Charge'
-                : previewData && previewData.amount !== undefined
-                  ? formatAmount(previewData.amount, previewData.currency)
-                  : plan.price}
-            </p>
-            <p className="text-xs text-gray-600">
-              {previewData && previewData.changeType === 'downgrade' ? 'today' : plan.period}
-            </p>
+            {previewData && previewData.changeType === 'upgrade' && previewData.isProrated ? (
+              <div>
+                <p className="text-xs text-gray-500 line-through">{plan.price}</p>
+                <p className="text-2xl font-bold text-gray-900">
+                  {formatAmount(previewData.amount, previewData.currency)}
+                </p>
+                <p className="text-xs text-gray-600">prorated charge</p>
+              </div>
+            ) : (
+              <>
+                <p className="text-2xl font-bold text-gray-900">
+                  {previewData && previewData.changeType === 'downgrade'
+                    ? 'No Charge'
+                    : previewData && previewData.amount !== undefined
+                      ? formatAmount(previewData.amount, previewData.currency)
+                      : plan.price}
+                </p>
+                <p className="text-xs text-gray-600">
+                  {previewData && previewData.changeType === 'downgrade' ? 'today' : plan.period}
+                </p>
+              </>
+            )}
           </div>
         </div>
       </div>

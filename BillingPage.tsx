@@ -485,12 +485,33 @@ const BillingPage: React.FC = () => {
   const formatDate = (timestampOrString: number | string) => {
     let date;
     if (typeof timestampOrString === 'number') {
-        date = new Date(timestampOrString * 1000); 
+        date = new Date(timestampOrString * 1000);
     } else {
-        date = new Date(timestampOrString); 
+        date = new Date(timestampOrString);
     }
     if (isNaN(date.getTime())) return 'N/A';
-    return date.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+    return date.toLocaleDateString('en-US', {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      timeZone: 'UTC'
+    });
+  };
+
+  const formatDateLong = (timestampOrString: number | string) => {
+    let date;
+    if (typeof timestampOrString === 'number') {
+        date = new Date(timestampOrString * 1000);
+    } else {
+        date = new Date(timestampOrString);
+    }
+    if (isNaN(date.getTime())) return 'N/A';
+    return date.toLocaleDateString('en-US', {
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+      timeZone: 'UTC'
+    });
   };
 
   const getPlanDisplayName = (planType: string, status: string) => {
@@ -584,7 +605,7 @@ const BillingPage: React.FC = () => {
                        <p className="text-sm font-bold text-blue-900">Plan Change Scheduled</p>
                        <p className="text-xs text-blue-700 mt-1 leading-relaxed">
                          Your plan will change to {subscription.subscription.pending_plan_change.plan_type.charAt(0).toUpperCase() + subscription.subscription.pending_plan_change.plan_type.slice(1)} Plan on{' '}
-                         {new Date(subscription.subscription.current_period_end).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}.
+                         {formatDateLong(subscription.subscription.current_period_end)}.
                          You'll keep full access to your current plan until then.
                        </p>
                      </div>
@@ -607,8 +628,8 @@ const BillingPage: React.FC = () => {
                      <div className="flex items-center gap-2">
                         <Clock className={`w-4 h-4 ${isCancelled || isTrial ? 'text-amber-500' : 'text-gray-400'}`} />
                         <p className={`font-bold ${isCancelled ? 'text-red-600' : 'text-gray-900'}`}>
-                           {subscription?.subscription?.current_period_end 
-                              ? new Date(subscription.subscription.current_period_end).toLocaleDateString()
+                           {subscription?.subscription?.current_period_end
+                              ? formatDate(subscription.subscription.current_period_end)
                               : 'N/A'}
                         </p>
                      </div>
@@ -798,7 +819,7 @@ const BillingPage: React.FC = () => {
              <p className="text-gray-500 mb-8 leading-relaxed">
                {isTrial 
                   ? "You will lose access to premium features immediately upon cancellation."
-                  : <>You will lose access to premium features when your current period ends on <span className="font-bold text-gray-900">{subscription?.subscription?.current_period_end ? new Date(subscription.subscription.current_period_end).toLocaleDateString() : ''}</span>.</>
+                  : <>You will lose access to premium features when your current period ends on <span className="font-bold text-gray-900">{subscription?.subscription?.current_period_end ? formatDate(subscription.subscription.current_period_end) : ''}</span>.</>
                }
              </p>
              <div className="flex flex-col gap-3">

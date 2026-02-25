@@ -19,7 +19,8 @@ const UpgradePage: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [showCheckout, setShowCheckout] = useState(false);
   const [error, setError] = useState('');
-  
+  const [proratedPrices, setProratedPrices] = useState<Record<string, any>>({});
+
   const { user } = useAuth();
   const navigate = useNavigate();
   const { currency, formatPrice } = useCurrency(); 
@@ -83,6 +84,12 @@ const UpgradePage: React.FC = () => {
     }
   }, [user]);
 
+  useEffect(() => {
+    if (currentSubscription && plans.length > 0) {
+      loadProratedPrices();
+    }
+  }, [currentSubscription, plans]);
+
   const loadCurrentSubscription = async () => {
     if (!user) return;
 
@@ -94,6 +101,51 @@ const UpgradePage: React.FC = () => {
     } finally {
       setLoading(false);
     }
+  };
+
+  const loadProratedPrices = async () => {
+    const { subscription } = currentSubscription;
+    if (!subscription || subscription.plan_type === 'trial' || subscription.status === 'trialing') {
+      return;
+    }
+
+    try {
+      const { data: { session } } = await SubscriptionService['supabase'].auth.getSession();
+      if (!session?.access_token) return;
+
+      const pricesMap: Record<string, any> = {};
+
+      for (const plan of plans) {
+        const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/preview-plan-change`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${session.access_token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            newPlanType: plan.planId,
+            newPriceId: plan.priceId
+          })
+        });
+
+        if (response.ok) {
+          const preview = await response.json();
+          pricesMap[plan.planId] = preview;
+        }
+      }
+
+      setProratedPrices(pricesMap);
+    } catch (error) {
+      console.error('Error loading prorated prices:', error);
+    }
+  };
+
+  const formatAmount = (amount: number, currencyCode: string) => {
+    const formatted = (amount / 100).toFixed(2);
+    const symbol = currencyCode.toUpperCase() === 'MYR' ? 'RM' :
+                   currencyCode.toUpperCase() === 'USD' ? '$' :
+                   currencyCode.toUpperCase();
+    return `${symbol} ${formatted}`;
   };
 
   const handleUpgrade = () => {
@@ -253,8 +305,20 @@ const UpgradePage: React.FC = () => {
                   {plan.name}
                 </h3>
                 <div className="mb-4">
-                  <span className="text-4xl font-bold text-gray-900">{plan.price}</span>
-                  <span className="text-gray-600 ml-2">{plan.period}</span>
+                  {proratedPrices[plan.planId] && proratedPrices[plan.planId].isProrated ? (
+                    <div>
+                      <div className="text-lg text-gray-500 line-through">{plan.price}</div>
+                      <div className="text-4xl font-bold text-gray-900">
+                        {formatAmount(proratedPrices[plan.planId].amount, proratedPrices[plan.planId].currency)}
+                      </div>
+                      <div className="text-sm text-[#E85A9B] font-semibold">prorated charge</div>
+                    </div>
+                  ) : (
+                    <>
+                      <span className="text-4xl font-bold text-gray-900">{plan.price}</span>
+                      <span className="text-gray-600 ml-2">{plan.period}</span>
+                    </>
+                  )}
                 </div>
                 <p className="text-gray-600">{plan.description}</p>
               </div>
